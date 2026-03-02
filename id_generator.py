@@ -1,5 +1,8 @@
 import uuid
 import hashlib
+import hmac
+
+SECRET_KEY = b"MY_SUPER_SECRET_KEY"  # keep private
 
 
 class UniqueIDGenerator:
@@ -9,8 +12,12 @@ class UniqueIDGenerator:
         return str(uuid.uuid4())
 
     @staticmethod
-    def hash_id(unique_id):
-        return hashlib.sha256(unique_id.encode()).hexdigest()
+    def secure_hash(data):
+        return hmac.new(
+            SECRET_KEY,
+            data.encode(),
+            hashlib.sha256
+        ).hexdigest()
 
     @staticmethod
     def string_to_bits(data):

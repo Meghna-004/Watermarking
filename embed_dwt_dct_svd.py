@@ -5,97 +5,143 @@ import pywt
 
 class EmbedDwtDctSvd:
 
-    def __init__(self, watermarks, scales=None, block=4):
+    def __init__(self, watermarks, scale=30, block=4):
         self._watermarks = watermarks
         self._wmLen = len(watermarks)
-        self._scales = scales if scales else [0, 36, 0]
+        self._scale = scale
         self._block = block
 
+    # -----------------------------------
+    # ENCODE
+    # -----------------------------------
+
     def encode(self, image):
-        row, col, _ = image.shape
+
         yuv = cv2.cvtColor(image, cv2.COLOR_BGR2YUV)
+        Y = yuv[:, :, 0]
 
-        for channel in range(2):
-            if self._scales[channel] <= 0:
-                continue
+        # 🔹 2-Level DWT
+        coeffs1 = pywt.dwt2(Y, 'haar')
+        LL1, (LH1, HL1, HH1) = coeffs1
 
-            sub = yuv[:row//4*4, :col//4*4, channel]
-            ca1, (h1, v1, d1) = pywt.dwt2(sub, 'haar')
+        coeffs2 = pywt.dwt2(LL1, 'haar')
+        LL2, (LH2, HL2, HH2) = coeffs2
 
-            self._encode_frame(ca1, self._scales[channel])
+        # Embed in LH2 band (more robust)
+        # Capacity check
+        row, col = LH2.shape
+        capacity = (row // self._block) * (col // self._block)
 
-            recon = pywt.idwt2((ca1, (h1, v1, d1)), 'haar')
-            recon = np.clip(recon, 0, 255)
+        if self._wmLen > capacity:
+            raise Exception("Watermark too large for this image capacity")
 
-            yuv[:row//4*4, :col//4*4, channel] = recon.astype(np.uint8)
+        # Embed in LH2 band
+        self._embed_frame(LH2)
+
+        # Reconstruct
+        LL1_recon = pywt.idwt2((LL2, (LH2, HL2, HH2)), 'haar')
+        Y_recon = pywt.idwt2((LL1_recon, (LH1, HL1, HH1)), 'haar')
+
+        Y_recon = np.clip(Y_recon, 0, 255)
+        yuv[:, :, 0] = Y_recon.astype(np.uint8)
 
         return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
 
+    # -----------------------------------
+    # DECODE
+    # -----------------------------------
+
     def decode(self, image):
-        row, col, _ = image.shape
+
         yuv = cv2.cvtColor(image, cv2.COLOR_BGR2YUV)
+        Y = yuv[:, :, 0]
 
-        scores = [[] for _ in range(self._wmLen)]
+        coeffs1 = pywt.dwt2(Y, 'haar')
+        LL1, _ = coeffs1
 
-        for channel in range(2):
-            if self._scales[channel] <= 0:
-                continue
+        coeffs2 = pywt.dwt2(LL1, 'haar')
+        LL2, (LH2, _, _) = coeffs2
 
-            ca1, _ = pywt.dwt2(yuv[:row//4*4, :col//4*4, channel], 'haar')
-            scores = self._decode_frame(ca1, self._scales[channel], scores)
+        return self._decode_frame(LH2)
 
-        avgScores = list(map(lambda l: np.array(l).mean(), scores))
-        bits = (np.array(avgScores) > 0.5)
+    # -----------------------------------
+    # EMBED FRAME
+    # -----------------------------------
 
-        return bits.astype(int).tolist()
+    def _embed_frame(self, frame):
 
-    # ---------- Internal ----------
-
-    def _encode_frame(self, frame, scale):
         row, col = frame.shape
         num = 0
 
-        for i in range(row//self._block):
-            for j in range(col//self._block):
-                block = frame[i*self._block:(i+1)*self._block,
-                              j*self._block:(j+1)*self._block]
+        for i in range(row // self._block):
+            for j in range(col // self._block):
 
-                wmBit = self._watermarks[num % self._wmLen]
-                modified = self._embed_block(block, wmBit, scale)
+                block = frame[
+                    i*self._block:(i+1)*self._block,
+                    j*self._block:(j+1)*self._block
+                ]
 
-                frame[i*self._block:(i+1)*self._block,
-                      j*self._block:(j+1)*self._block] = modified
+                bit = self._watermarks[num % self._wmLen]
+                modified = self._embed_block(block, bit)
+
+                frame[
+                    i*self._block:(i+1)*self._block,
+                    j*self._block:(j+1)*self._block
+                ] = modified
 
                 num += 1
 
-    def _embed_block(self, block, wmBit, scale):
+    # -----------------------------------
+    # EMBED BLOCK (Differential SVD)
+    # -----------------------------------
+
+    def _embed_block(self, block, bit):
+
         dct_block = cv2.dct(block.astype(np.float32))
-        u, s, v = np.linalg.svd(dct_block)
+        U, S, V = np.linalg.svd(dct_block)
 
-        q = np.floor(s[0] / scale)
-        s[0] = (q + 0.25 + 0.5 * wmBit) * scale
+        if bit == 1:
+            S[0] = S[1] + self._scale
+        else:
+            S[0] = S[1] - self._scale
 
-        modified = np.dot(u, np.dot(np.diag(s), v))
+        modified = U @ np.diag(S) @ V
         return cv2.idct(modified)
 
-    def _decode_frame(self, frame, scale, scores):
+    # -----------------------------------
+    # DECODE FRAME
+    # -----------------------------------
+
+    def _decode_frame(self, frame):
+
         row, col = frame.shape
+        scores = [[] for _ in range(self._wmLen)]
         num = 0
 
-        for i in range(row//self._block):
-            for j in range(col//self._block):
-                block = frame[i*self._block:(i+1)*self._block,
-                              j*self._block:(j+1)*self._block]
+        for i in range(row // self._block):
+            for j in range(col // self._block):
 
-                bit = self._extract_block(block, scale)
-                wmBit = num % self._wmLen
-                scores[wmBit].append(bit)
+                block = frame[
+                    i*self._block:(i+1)*self._block,
+                    j*self._block:(j+1)*self._block
+                ]
+
+                bit = self._extract_block(block)
+                wmIndex = num % self._wmLen
+                scores[wmIndex].append(bit)
 
                 num += 1
 
-        return scores
+        avg = [np.mean(s) for s in scores]
+        return (np.array(avg) > 0.5).astype(int).tolist()
 
-    def _extract_block(self, block, scale):
+    # -----------------------------------
+    # EXTRACT BLOCK
+    # -----------------------------------
+
+    def _extract_block(self, block):
+
         dct_block = cv2.dct(block.astype(np.float32))
-        _, s, _ = np.linalg.svd(dct_block)
-        return int((s[0] % scale) > scale * 0.5)
+        _, S, _ = np.linalg.svd(dct_block)
+
+        return 1 if S[0] > S[1] else 0

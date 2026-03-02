@@ -1,92 +1,69 @@
-# import cv2
-# from id_generator import UniqueIDGenerator
-# from watermark_builder import WatermarkBuilder
-# from embed_dwt_dct_svd import EmbedDwtDctSvd
-
-
-# class WatermarkSystem:
-
-#     def __init__(self):
-#         self.unique_id = None
-#         self.watermark_bits = None
-
-#     def generate_user_watermark(self, signature_path):
-#         self.unique_id = UniqueIDGenerator.generate()
-
-#         builder = WatermarkBuilder()
-#         self.watermark_bits = builder.build_from_id_and_signature(
-#             self.unique_id, signature_path
-#         )
-
-#         return self.unique_id
-
-#     def embed(self, input_path, output_path):
-#         image = cv2.imread(input_path)
-#         embedder = EmbedDwtDctSvd(self.watermark_bits)
-#         watermarked = embedder.encode(image)
-#         cv2.imwrite(output_path, watermarked)
-
-#     def decode(self, image_path):
-#         image = cv2.imread(image_path)
-#         embedder = EmbedDwtDctSvd(self.watermark_bits)
-#         return embedder.decode(image)
-
-
 import cv2
-from id_generator import UniqueIDGenerator
-from watermark_builder import WatermarkBuilder
+import hashlib
+from datetime import datetime
+
 from embed_dwt_dct_svd import EmbedDwtDctSvd
+from watermark_builder import WatermarkBuilder
 
 
 class WatermarkSystem:
 
-    def __init__(self):
-        self.unique_id = None
-        self.watermark_bits = None
+    def __init__(self, db):
+        self.db = db  # database handler
 
-    def generate_user_watermark(self, signature_path, image_name):
-        self.unique_id = UniqueIDGenerator.generate()
+    # -------------------------------------
+    # EMBED WATERMARK
+    # -------------------------------------
 
+    def embed(self, user_id, input_path, output_path):
+
+        # 1️⃣ Fetch user data from DB
+        user = self.db.get_user(user_id)
+
+        if user is None:
+            raise Exception("User not found")
+
+        signature_bits = user["signature_bits"]
+        unique_id = user_id
+
+        # 2️⃣ Prepare metadata
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        image_id = self.db.generate_image_id()
+
+        image = cv2.imread(input_path)
+        if image is None:
+            raise Exception("Invalid input image")
+
+        image_hash = hashlib.sha256(image.tobytes()).hexdigest()
+
+        # 3️⃣ Build secure dynamic watermark
         builder = WatermarkBuilder()
-        self.watermark_bits = builder.build_dynamic_watermark(
-            self.unique_id,
-            image_name,
-            signature_path
+        watermark_bits = builder.build_dynamic_watermark(
+            unique_id,
+            image_id,
+            signature_bits,
+            timestamp,
+            image_hash
         )
 
-        return self.unique_id
-
-    def embed(self, input_path, output_path):
-        image = cv2.imread(input_path)
-        embedder = EmbedDwtDctSvd(self.watermark_bits)
+        # 4️⃣ Embed watermark using DWT-DCT-SVD
+        embedder = EmbedDwtDctSvd(watermark_bits)
         watermarked = embedder.encode(image)
+
         cv2.imwrite(output_path, watermarked)
 
-    def decode(self, image_path):
-        image = cv2.imread(image_path)
-        embedder = EmbedDwtDctSvd(self.watermark_bits)
-        return embedder.decode(image)
+        # 5️⃣ Store metadata in DB
+        self.db.store_image({
+            "image_id": image_id,
+            "user_id": user_id,
+            "timestamp": timestamp,
+            "image_hash": image_hash,
+            "original_path": input_path,
+            "watermarked_path": output_path
+        })
 
-    # ✅ ADD THIS
-    def verify(self, image_path, threshold=0.95):
-
-        extracted_bits = self.decode(image_path)
-
-        if self.watermark_bits is None:
-            raise Exception("Watermark not generated!")
-
-        min_len = min(len(self.watermark_bits), len(extracted_bits))
-
-        matches = 0
-        for i in range(min_len):
-            if self.watermark_bits[i] == extracted_bits[i]:
-                matches += 1
-
-        similarity = matches / min_len
-
-        print("Similarity Score:", similarity)
-
-        if similarity >= threshold:
-            return "AUTHENTIC (Not Tampered)"
-        else:
-            return "TAMPERED"
+        return {
+            "status": "EMBED_SUCCESS",
+            "image_id": image_id,
+            "timestamp": timestamp
+        }
