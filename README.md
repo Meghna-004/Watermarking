@@ -1,2 +1,0 @@
-# Watermarking
-Watermarking Project
