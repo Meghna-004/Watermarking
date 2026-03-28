@@ -45,7 +45,7 @@ def run_test():
     cv2.imwrite(ATTACKED_IMAGE, attacked)
 
     verifier = VerificationEngine(db)
-    result = verifier.verify(ATTACKED_IMAGE)
+    result = verifier.verify(ATTACKED_IMAGE,'IMG_1')
 
     print("\nResult")
     print("Status:", result["status"])
