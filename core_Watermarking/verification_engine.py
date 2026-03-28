@@ -56,10 +56,10 @@ class VerificationEngine:
         best_result = None
         best_nc = -1
 
-        # ✅ Fetch user once
+        # Fetch user once
         user_data = self.db.get_user(user_id) if user_id else None
 
-        # ✅ Initialize builder once
+        # Initialize builder once
         builder = WatermarkBuilder()
 
         # --------------------------------------------------
@@ -111,7 +111,7 @@ class VerificationEngine:
             else:
                 status = "FORGED_OR_TAMPERED"
 
-            # 🔹 Select best match
+            # Normal best selection
             if nc > best_nc:
                 best_nc = nc
                 best_result = {
@@ -121,16 +121,20 @@ class VerificationEngine:
                     "BER": ber
                 }
 
+            # Early exit (optimization)
+            if nc > 0.95:
+                break
+
         # --------------------------------------------------
         # 🎯 FINAL PROCESSING (HEAVY WORK ONLY ONCE)
         # --------------------------------------------------
-        if best_result and best_nc > 0.75:
+        if best_result and best_nc > 0.6:
 
             try:
                 best_path = self.db.images[best_result["image_id"]]["watermarked_path"]
                 original = cv2.imread(best_path)
 
-                # ✅ Compute features once
+                # Compute features once
                 features = compute_features(original, attacked)
 
                 features.update({
@@ -141,13 +145,13 @@ class VerificationEngine:
 
                 best_result["metrics"] = features
 
-                # ✅ ML Prediction once
+                # ML Prediction once
                 if best_result["status"] != "AUTHENTIC":
                     best_result["Predicted_Attack"] = self.predictor.predict(original, attacked)
                 else:
                     best_result["Predicted_Attack"] = "NONE"
 
-                # ✅ FRONTEND-FRIENDLY SUMMARY
+                # FRONTEND-FRIENDLY SUMMARY
                 confidence = round(best_result["NC"] * 100, 2)
 
                 if best_result["status"] == "AUTHENTIC":
