@@ -1,4 +1,8 @@
 import cv2
+import os
+
+import warnings
+warnings.filterwarnings("ignore")
 
 from core_Watermarking.test.main import DummyDB
 from core_Watermarking.watermark_system import WatermarkSystem
@@ -9,10 +13,12 @@ from new_ml_pipeline.attacks.apply_custom_attack import (
     get_user_attacks
 )
 
-
 INPUT_IMAGE = "assets/og_image.png"
-WATERMARKED_IMAGE = "assets/watermarked_output.jpg"
-ATTACKED_IMAGE = "assets/attacked_output.jpg"
+WATERMARKED_IMAGE = "storage/watermarked/test_output.jpg"
+ATTACKED_IMAGE = "storage/attacked/test_attack.jpg"
+
+os.makedirs("storage/watermarked", exist_ok=True)
+os.makedirs("storage/attacked", exist_ok=True)
 
 
 def run_test():
